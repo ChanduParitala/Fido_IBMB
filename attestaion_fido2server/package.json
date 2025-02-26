@@ -10,9 +10,12 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@fidm/x509": "^1.2.1",
+    "asn1.js": "^5.4.1",
     "base64url": "^3.0.1",
     "bcrypt": "^5.1.1",
     "body-parser": "^1.20.3",
+    "cbor": "^10.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

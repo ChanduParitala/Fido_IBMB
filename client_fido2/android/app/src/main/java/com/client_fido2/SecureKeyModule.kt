@@ -12,11 +12,31 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import java.util.concurrent.Executors
+import android.content.pm.PackageManager
+import java.security.MessageDigest
 
 class SecureKeyModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
     override fun getName(): String {
         return "SecureKeyModule"
+    }
+
+    @ReactMethod
+    fun getPackageHash(promise: Promise) {
+        try {
+            val packageManager = reactApplicationContext.packageManager
+            val packageInfo = packageManager.getPackageInfo(
+                reactApplicationContext.packageName,
+                PackageManager.GET_SIGNATURES
+            )
+            val signature = packageInfo.signatures[0].toByteArray()
+            val md = MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(signature)
+            val hashString = Base64.encodeToString(digest, Base64.NO_WRAP)
+            promise.resolve(hashString)
+        } catch (e: Exception) {
+            promise.reject("PACKAGE_HASH_ERROR", "Failed to get package hash", e)
+        }
     }
 
     @ReactMethod
@@ -57,7 +77,7 @@ class SecureKeyModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     fun generateKeyPair(alias: String, promise: Promise) {
         try {
             val keyPairGenerator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-            val keyGenParameterSpec = KeyGenParameterSpec.Builder(
+            val keyGenParameterSpecBuilder = KeyGenParameterSpec.Builder(
                 alias,
                 KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
             )
@@ -65,21 +85,35 @@ class SecureKeyModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
                 .setDigests(KeyProperties.DIGEST_SHA256)
                 .setUserAuthenticationRequired(true)
                 .setUserAuthenticationValidityDurationSeconds(-1) // Force authentication per operation
-                .setUserAuthenticationValidWhileOnBody(false)
+                .setUserAuthenticationValidWhileOnBody(false) // Require re-authentication if device is moved
                 .setUnlockedDeviceRequired(true) // Ensure device is unlocked
-                .setIsStrongBoxBacked(true) // Use StrongBox if supported
-                .setInvalidatedByBiometricEnrollment(true)
-                .build()
+                .setInvalidatedByBiometricEnrollment(true) // Invalidate key if biometric is added/removed
 
-            keyPairGenerator.initialize(keyGenParameterSpec)
+            try {
+                // Try with StrongBox first
+                val keyGenParameterSpec = keyGenParameterSpecBuilder
+                    .setIsStrongBoxBacked(true)
+                    .build()
+                keyPairGenerator.initialize(keyGenParameterSpec)
+            } catch (e: Exception) {
+                // Fallback to non-StrongBox
+                val keyGenParameterSpec = keyGenParameterSpecBuilder
+                    .setIsStrongBoxBacked(false)
+                    .build()
+                keyPairGenerator.initialize(keyGenParameterSpec)
+            }
+
             val keyPair = keyPairGenerator.generateKeyPair()
 
             val publicKeyBytes = keyPair.public.encoded
             val publicKeyBase64 = Base64.encodeToString(publicKeyBytes, Base64.NO_WRAP)
 
-            promise.resolve(publicKeyBase64)
+            val result = WritableNativeMap()
+            result.putString("publicKey", publicKeyBase64)
+            result.putString("privateKeyAlias", alias)
+            promise.resolve(result)
         } catch (e: Exception) {
-            promise.reject("KEY_GEN_ERROR", "Failed to generate key pair", e)
+            promise.reject("KEY_GEN_ERROR", "Failed to generate key pair: ${e.message}", e)
         }
     }
 
